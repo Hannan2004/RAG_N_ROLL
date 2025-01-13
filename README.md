@@ -36,7 +36,7 @@ The International Business Setup Assistant is an AI-driven Streamlit application
 - **Cortex:** Enables advanced search and retrieval capabilities.
   - Provides chunked data from a specialized database for accurate responses.
 
-### Mistral Language Model
+### Mistral Language Model (mistral-large2)
 - Processes user queries and context to generate intelligent, human-like responses.
 - Adapts to changing contexts, providing both generic and specific guidance.
 
@@ -62,14 +62,16 @@ The International Business Setup Assistant is an AI-driven Streamlit application
 
 ## 📷 Screenshots
 
-### Home Page and Sidebar
-The app welcomes users with an introduction and a sidebar for entering business context.
-
 ### Chat Interface
-Users interact with the assistant, receive responses, and provide feedback.
+The app welcomes users with an introduction and a sidebar for entering business context. Users interact with the assitant, receive responses, and provide feedback
+![Screenshot 2025-01-13 233608](https://github.com/user-attachments/assets/6e2aedee-53c2-4053-a6de-9a120e6d74cd)
 
 ### Response Generation
 The assistant processes questions and generates context-aware, step-by-step guidance.
+
+
+https://github.com/user-attachments/assets/dc1dd6aa-156f-47f2-9926-abf8867efc59
+
 
 ## 🌐 How Snowflake and Mistral Enhance the Application
 
