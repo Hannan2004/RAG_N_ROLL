@@ -1,305 +1,168 @@
-import streamlit as st
-from snowflake.snowpark import Session
-from snowflake.cortex import Complete
+import streamlit as st  # Import python packages
 from snowflake.core import Root
+from snowflake.snowpark import Session
 import pandas as pd
-from datetime import datetime
-import time
-import re
+import json
 
-st.set_page_config(
-    page_title="Business Setup Assistant",
-    layout="wide",
-    initial_sidebar_state="expanded",
-    menu_items={
-        'Get Help': 'https://www.example.com/help',
-        'Report a bug': "https://www.example.com/bug",
-        'About': "Business Setup Assistant v1.0"
-    }
-)
-conn = st.connection("snowflake")
-
-# Set pandas options
 pd.set_option("max_colwidth", None)
 
-# Configuration
-NUM_CHUNKS = 3
-SLIDE_WINDOW = 7
-CORTEX_SEARCH_DATABASE = st.secrets["connections"]["snowflake"]["database"]
-CORTEX_SEARCH_SCHEMA = st.secrets["connections"]["snowflake"]["schema"]
+### Default Values
+NUM_CHUNKS = 3  # Num-chunks provided as context. Play with this to check how it affects your accuracy
+
+# service parameters
+CORTEX_SEARCH_DATABASE = "CC_QUICKSTART_CORTEX_SEARCH_DOCS"
+CORTEX_SEARCH_SCHEMA = "DATA"
 CORTEX_SEARCH_SERVICE = "CC_SEARCH_SERVICE_CS"
-CORTEX_SEARCH_TABLE = "DOCS_CHUNKS_TABLE"
-MODEL_NAME = "mistral-large2"
-COLUMNS = ["chunk", "relative_path", "category"]
+######
+######
 
-def init_session_state():
-    """Initialize all session state variables."""
-    defaults = {
-        "messages": [],
-        "conversation_id": datetime.now().strftime("%Y%m%d_%H%M%S"),
-        "feedback": {},
-        "selected_country": None,
-        "business_type": None,
-        "theme": "light"
-    }
+connection_parameters = {
+    "account": st.secrets["connections"]["snowflake"]["account"],
+    "user": st.secrets["connections"]["snowflake"]["user"],
+    "password": st.secrets["connections"]["snowflake"]["password"],
+    "role": st.secrets["connections"]["snowflake"]["role"],
+    "warehouse": st.secrets["connections"]["snowflake"]["warehouse"],
+    "database": st.secrets["connections"]["snowflake"]["database"],
+    "schema": st.secrets["connections"]["snowflake"]["schema"]
+}
 
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+# columns to query in the service
+COLUMNS = [
+    "chunk",
+    "relative_path",
+    "category"
+]
+@st.cache_resource
+def get_active_session():
+    session = Session.builder.configs(connection_parameters).create()
+    return session
 
+session = get_active_session()
+if session:
+    st.success("Connected to Snowflake successfully!")
+else:
+    st.error("Failed to connect to Snowflake.")
+root = Root(session)
 
-@st.cache_data
-def get_similar_chunks(query):
-    """Fetch similar chunks using Snowpark session."""
-    session = conn.session()  # Get the Snowpark session
-    try:
-        # Query Snowflake using Snowpark
-        result_df = (
-            session.table(CORTEX_SEARCH_TABLE)
-            .filter(f"chunk LIKE '%{query}%'")  # Adjust query as needed
-            .select(*COLUMNS)
-            .limit(NUM_CHUNKS)
-            .to_pandas()  # Convert Snowpark DataFrame to pandas DataFrame
-        )
-        return result_df
-    except Exception as e:
-        st.error(f"Error fetching similar chunks: {str(e)}")
-        return pd.DataFrame(columns=COLUMNS)
+svc = root.databases[CORTEX_SEARCH_DATABASE].schemas[CORTEX_SEARCH_SCHEMA].cortex_search_services[CORTEX_SEARCH_SERVICE]
 
 
-def get_chat_history():
-    """Retrieve recent chat history."""
-    chat_history = []
-    start_index = max(0, len(st.session_state.messages) - SLIDE_WINDOW)
-    for i in range(start_index, len(st.session_state.messages) - 1):
-        chat_history.append(st.session_state.messages[i])
-    return chat_history
+### Functions
+def config_options():
+    st.sidebar.selectbox('Select your model:', (
+        'mixtral-8x7b',
+        'snowflake-arctic',
+        'mistral-large',
+        'llama3-8b',
+        'llama3-70b',
+        'reka-flash',
+        'mistral-7b',
+        'llama2-70b-chat',
+        'gemma-7b'), key="model_name")
+
+    categories = session.sql("select category from docs_chunks_table group by category").collect()
+
+    cat_list = ['ALL']
+    for cat in categories:
+        cat_list.append(cat.CATEGORY)
+
+    st.sidebar.selectbox('Select what products you are looking for', cat_list, key="category_value")
+
+    st.sidebar.expander("Session State").write(st.session_state)
 
 
-def create_prompt(myquestion, country=None, business_type=None):
-    """Create an enhanced prompt with business context."""
-    chat_history = get_chat_history()
-    prompt_context = get_similar_chunks(myquestion)
+def get_similar_chunks_search_service(query):
+    if st.session_state.category_value == "ALL":
+        response = svc.search(query, COLUMNS, limit=NUM_CHUNKS)
+    else:
+        filter_obj = {"@eq": {"category": st.session_state.category_value}}
+        response = svc.search(query, COLUMNS, filter=filter_obj, limit=NUM_CHUNKS)
 
-    context_info = "\n".join(filter(None, [
-        f"Country: {country}" if country else "",
-        f"Business Type: {business_type}" if business_type else ""
-    ]))
+    st.sidebar.json(response.json())
 
-    prompt = f"""
-    You are a highly intelligent business assistant specializing in providing concise and accurate answers about setting up businesses internationally.
-    {context_info}
-
-    Use the information between <context> tags to address the user's question and offer actionable insights.
-    If the information isn't in the context, you can provide general guidance based on common business practices.
-    Focus on practical, step-by-step advice when applicable.
-
-    <chat_history>
-    {chat_history}
-    </chat_history>
-
-    <context>
-    {prompt_context.to_string(index=False)}
-    </context>
-
-    <question>
-    {myquestion}
-    </question>
-
-    Answer:
-    """
-    return prompt
+    return response.json()
 
 
-def format_markdown(text):
-    """Pre-format markdown text into proper sections."""
-    # Split text into paragraphs
-    paragraphs = text.split('\n\n')
-    formatted_paragraphs = []
+def create_prompt(myquestion):
+    if st.session_state.rag == 1:
+        prompt_context = get_similar_chunks_search_service(myquestion)
 
-    for para in paragraphs:
-        # Handle headers
-        para = re.sub(r'###\s+(.+)', r'### \1', para)
-        # Handle bullet points
-        para = re.sub(r'^\*\s+(.+)', r'* \1', para, flags=re.MULTILINE)
-        # Handle numbered lists
-        para = re.sub(r'^\d+\.\s+(.+)', r'1. \1', para, flags=re.MULTILINE)
-        # Handle bold text
-        para = re.sub(r'\*\*(.+?)\*\*', r'**\1**', para)
+        prompt = f"""
+           You are an expert chat assistance that extracs information from the CONTEXT provided
+           between <context> and </context> tags.
+           When ansering the question contained between <question> and </question> tags
+           be concise and do not hallucinate. 
+           If you don´t have the information just say so.
+           Only anwer the question if you can extract it from the CONTEXT provideed.
 
-        formatted_paragraphs.append(para)
+           Do not mention the CONTEXT used in your answer.
 
-    return '\n\n'.join(formatted_paragraphs)
+           <context>          
+           {prompt_context}
+           </context>
+           <question>  
+           {myquestion}
+           </question>
+           Answer: 
+           """
 
+        json_data = json.loads(prompt_context)
 
-def stream_response(response, message_placeholder):
-    """Stream the response with a typewriter effect while maintaining markdown formatting."""
-    # Pre-format the entire response
-    formatted_response = format_markdown(response)
+        relative_paths = set(item['relative_path'] for item in json_data['results'])
 
-    # Split into paragraphs to maintain structure
-    paragraphs = formatted_response.split('\n\n')
-    current_text = ""
+    else:
+        prompt = f"""[0]
+         'Question:  
+           {myquestion} 
+           Answer: '
+           """
+        relative_paths = "None"
 
-    for paragraph in paragraphs:
-        words = paragraph.split(' ')
-        for word in words:
-            current_text += word + " "
-            # Update with proper markdown formatting
-            message_placeholder.markdown(current_text + "▌")
-            time.sleep(0.03)  # Slightly faster typing speed
-
-        # Add paragraph break
-        current_text += '\n\n'
-        message_placeholder.markdown(current_text + "▌")
-        time.sleep(0.1)  # Slightly longer pause between paragraphs
-
-    # Final update without cursor
-    message_placeholder.markdown(current_text.rstrip())
-    return current_text.rstrip()
-
-def answer_question(myquestion, country=None, business_type=None):
-    """Generate an answer for the user's question with enhanced context."""
-    try:
-        prompt = create_prompt(myquestion, country, business_type)
-        response = Complete('mistral-large2', prompt)
-        return response
-    except Exception as e:
-        error_message = f"I apologize, but I encountered an error: {str(e)}. Please try rephrasing your question."
-        return error_message
+    return prompt, relative_paths
 
 
-def display_feedback_buttons(message_idx):
-    """Display feedback buttons in a horizontal layout."""
-    cols = st.columns([0.9, 0.05, 0.05])
+def complete(myquestion):
+    prompt, relative_paths = create_prompt(myquestion)
+    cmd = """
+            select snowflake.cortex.complete(?, ?) as response
+          """
 
-    # Empty first column for spacing
-    cols[0].write("")
-
-    # Thumbs up button
-    if cols[1].button("👍", key=f"like_{message_idx}"):
-        st.session_state.feedback[message_idx] = "positive"
-        st.toast("Thank you for your positive feedback!", icon="✅")
-
-    # Thumbs down button
-    if cols[2].button("👎", key=f"dislike_{message_idx}"):
-        st.session_state.feedback[message_idx] = "negative"
-        st.toast("Thank you for your feedback. We'll work on improving.", icon="📝")
-
-
-def display_chat_interface():
-    """Display an enhanced chat interface with message timestamps."""
-    for idx, message in enumerate(st.session_state.messages):
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-            # Display timestamp in small, muted text
-            st.caption(f"Sent at {message['timestamp']}")
-
-            # Only show feedback buttons for assistant messages
-            if message["role"] == "assistant":
-                display_feedback_buttons(idx)
+    df_response = session.sql(cmd, params=[st.session_state.model_name, prompt]).collect()
+    return df_response, relative_paths
 
 
 def main():
-    # Custom CSS for better UI
-    st.markdown("""
-        <style>
-        .stSelectbox {
-            margin-bottom: 1rem;
-        }
-        .css-1d391kg {
-            padding-top: 1rem;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    st.title(f":speech_balloon: Chat Document Assistant with Snowflake Cortex")
+    st.write("This is the list of documents you already have and that will be used to answer your questions:")
+    docs_available = session.sql("ls @docs").collect()
+    list_docs = []
+    for doc in docs_available:
+        list_docs.append(doc["name"])
+    st.dataframe(list_docs)
 
-    # Initialize session state
-    init_session_state()
+    config_options()
 
-    # Sidebar for business context
-    with st.sidebar:
-        st.header("Business Context")
+    st.session_state.rag = st.sidebar.checkbox('Use your own documents as context?')
 
-        countries = [
-            "India", "United States", "United Kingdom", "Singapore",
-            "Spain", "Philippines", "Russia", "Other"
-        ]
-        selected_country = st.selectbox(
-            "Select Country",
-            countries,
-            index=countries.index(
-                st.session_state.selected_country) if st.session_state.selected_country in countries else 0
-        )
+    question = st.text_input("Enter question",
+                             placeholder="Is there any special lubricant to be used with the premium bike?",
+                             label_visibility="collapsed")
 
-        business_types = [
-            "LLC", "Corporation", "Sole Proprietorship",
-            "Partnership", "Other"
-        ]
-        selected_business_type = st.selectbox(
-            "Business Type",
-            business_types,
-            index=business_types.index(
-                st.session_state.business_type) if st.session_state.business_type in business_types else 0
-        )
+    if question:
+        response, relative_paths = complete(question)
+        res_text = response[0].RESPONSE
+        st.markdown(res_text)
 
-        if st.button("🗑️ Clear Conversation", type="primary"):
-            st.session_state.messages = []
-            st.session_state.conversation_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-            st.rerun()
+        if relative_paths != "None":
+            with st.sidebar.expander("Related Documents"):
+                for path in relative_paths:
+                    cmd2 = f"select GET_PRESIGNED_URL(@docs, '{path}', 360) as URL_LINK from directory(@docs)"
+                    df_url_link = session.sql(cmd2).to_pandas()
+                    url_link = df_url_link._get_value(0, 'URL_LINK')
 
-        st.divider()
-        st.caption("© 2024 Business Assistant")
+                    display_url = f"Doc: [{path}]({url_link})"
+                    st.sidebar.markdown(display_url)
 
-    # Main chat interface
-    st.title("🌐 Business Setup Assistant")
-
-    # Welcome message with enhanced formatting
-    if not st.session_state.messages:
-        st.info("""
-        👋 Welcome! I'm here to help you establish your business.
-
-        Select your target country and business type in the sidebar, then ask specific questions about:
-        * 📝 Registration processes
-        * ⚖️ Legal requirements
-        * 💰 Tax considerations
-        * 🏢 Licensing needs
-        * 💵 Cost estimates
-        """)
-
-    # Display chat interface
-    display_chat_interface()
-
-    # Chat input
-    if question := st.chat_input("Ask about setting up your business..."):
-        # Add user message
-        st.session_state.messages.append({
-            "role": "user",
-            "content": question,
-            "timestamp": datetime.now().strftime("%H:%M:%S")
-        })
-
-        # Display user message
-        with st.chat_message("user"):
-            st.markdown(question)
-
-        # Generate response
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            with st.spinner("Thinking... 🔍"):
-                response = answer_question(
-                    question,
-                    country=selected_country,
-                    business_type=selected_business_type
-                )
-                final_response = stream_response(response, message_placeholder)
-
-        # Save assistant response
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": final_response,
-            "timestamp": datetime.now().strftime("%H:%M:%S")
-        })
 
 if __name__ == "__main__":
     main()
