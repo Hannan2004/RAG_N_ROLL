@@ -7,6 +7,18 @@ from datetime import datetime
 import time
 import re
 
+st.set_page_config(
+    page_title="Business Setup Assistant",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://www.example.com/help',
+        'Report a bug': "https://www.example.com/bug",
+        'About': "Business Setup Assistant v1.0"
+    }
+)
+conn = st.connection("snowflake")
+
 # Set pandas options
 pd.set_option("max_colwidth", None)
 
@@ -16,31 +28,9 @@ SLIDE_WINDOW = 7
 CORTEX_SEARCH_DATABASE = st.secrets["connections"]["snowflake"]["database"]
 CORTEX_SEARCH_SCHEMA = st.secrets["connections"]["snowflake"]["schema"]
 CORTEX_SEARCH_SERVICE = "CC_SEARCH_SERVICE_CS"
+CORTEX_SEARCH_TABLE = "DOCS_CHUNKS_TABLE"
 MODEL_NAME = "mistral-large2"
 COLUMNS = ["chunk", "relative_path", "category"]
-
-# Snowflake session initialization
-def create_session():
-    """Create or reuse a Snowflake session."""
-    if "snowflake_session" not in st.session_state:
-        connection_parameters = {
-            "account": st.secrets["connections"]["snowflake"]["account"],
-            "user": st.secrets["connections"]["snowflake"]["user"],
-            "password": st.secrets["connections"]["snowflake"]["password"],
-            "role": st.secrets["connections"]["snowflake"]["role"],
-            "warehouse": st.secrets["connections"]["snowflake"]["warehouse"],
-            "database": st.secrets["connections"]["snowflake"]["database"],
-            "schema": st.secrets["connections"]["snowflake"]["schema"],
-        }
-        st.session_state.snowflake_session = Session.builder.configs(connection_parameters).create()
-    return st.session_state.snowflake_session
-
-
-# Initialize Snowflake Root
-session = create_session()
-root = Root(session)
-svc = root.databases[CORTEX_SEARCH_DATABASE].schemas[CORTEX_SEARCH_SCHEMA].cortex_search_services[CORTEX_SEARCH_SERVICE]
-
 
 def init_session_state():
     """Initialize all session state variables."""
@@ -58,14 +48,23 @@ def init_session_state():
             st.session_state[key] = value
 
 
-def get_similar_chunks_search_service(query):
-    """Fetch similar chunks with error handling."""
+@st.cache_data
+def get_similar_chunks(query):
+    """Fetch similar chunks using Snowpark session."""
+    session = conn.session()  # Get the Snowpark session
     try:
-        response = svc.search(query, COLUMNS, limit=NUM_CHUNKS)
-        return response.json()
+        # Query Snowflake using Snowpark
+        result_df = (
+            session.table(CORTEX_SEARCH_TABLE)
+            .filter(f"chunk LIKE '%{query}%'")  # Adjust query as needed
+            .select(*COLUMNS)
+            .limit(NUM_CHUNKS)
+            .to_pandas()  # Convert Snowpark DataFrame to pandas DataFrame
+        )
+        return result_df
     except Exception as e:
         st.error(f"Error fetching similar chunks: {str(e)}")
-        return []
+        return pd.DataFrame(columns=COLUMNS)
 
 
 def get_chat_history():
@@ -80,7 +79,7 @@ def get_chat_history():
 def create_prompt(myquestion, country=None, business_type=None):
     """Create an enhanced prompt with business context."""
     chat_history = get_chat_history()
-    prompt_context = get_similar_chunks_search_service(myquestion)
+    prompt_context = get_similar_chunks(myquestion)
 
     context_info = "\n".join(filter(None, [
         f"Country: {country}" if country else "",
@@ -100,7 +99,7 @@ def create_prompt(myquestion, country=None, business_type=None):
     </chat_history>
 
     <context>
-    {prompt_context}
+    {prompt_context.to_string(index=False)}
     </context>
 
     <question>
@@ -203,17 +202,6 @@ def display_chat_interface():
 
 
 def main():
-    st.set_page_config(
-        page_title="Business Setup Assistant",
-        layout="wide",
-        initial_sidebar_state="expanded",
-        menu_items={
-            'Get Help': 'https://www.example.com/help',
-            'Report a bug': "https://www.example.com/bug",
-            'About': "Business Setup Assistant v1.0"
-        }
-    )
-
     # Custom CSS for better UI
     st.markdown("""
         <style>
