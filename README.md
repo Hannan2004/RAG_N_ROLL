@@ -1,4 +1,4 @@
-# 🌐 International Business Setup Assistant
+# 🌐 BizEase - International Business Setup Assistant
 
 The International Business Setup Assistant is an AI-driven Streamlit application designed to assist users in establishing businesses internationally. By leveraging Snowflake's Snowpark and Cortex integration alongside a Mistral Large Language Model, this app delivers accurate, actionable, and context-aware business guidance.
 
@@ -114,7 +114,3 @@ https://github.com/user-attachments/assets/dc1dd6aa-156f-47f2-9926-abf8867efc59
 - **Language Support:** Introduce multilingual capabilities for non-English-speaking users.
 - **Real-Time Collaboration:** Enable team collaboration while planning and setting up businesses.
 - **User Analytics:** Use analytics to improve response accuracy based on user queries and feedback.
-
-
-
-
