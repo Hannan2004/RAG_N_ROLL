@@ -91,7 +91,7 @@ https://github.com/user-attachments/assets/dc1dd6aa-156f-47f2-9926-abf8867efc59
 
 #### Install dependencies:
 ```bash
- pip install streamlit snowflake-snowpark-python pandas
+ pip install streamlit snowflake
 ```
 #### Configure secrets in Streamlit:
 - account = "your_account".
