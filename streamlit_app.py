@@ -8,7 +8,7 @@ import time
 import re
 
 st.set_page_config(
-    page_title="Business Setup Assistant",
+    page_title="BizEase",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -262,7 +262,7 @@ def main():
         st.caption("© 2024 Business Assistant")
 
     # Main chat interface
-    st.title("🌐 Business Setup Assistant")
+    st.title("🌐BizEase - Business Setup Assistant")
 
     # Welcome message with enhanced formatting
     if not st.session_state.messages:
